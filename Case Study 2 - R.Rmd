@@ -1,0 +1,368 @@
+---
+title: "Case Study 2 - Mental Health in the Tech Industry"
+output:
+  html_document: default
+---
+### Loading Data and General Manipulation
+```{r}
+library(tidyverse)
+library(readr)
+library(skimr)
+library(lubridate)
+library(SimDesign)
+library(janitor)
+library(RSQLite)
+library(knitr)
+library(scales)
+
+con <- dbConnect(drv=RSQLite::SQLite(), dbname="mental_health.sqlite")
+df <- dbSendQuery(con, "SELECT * FROM MASTER_DATA")
+MASTER_DATA <- dbFetch(df)
+
+MASTER_DATA <- rename(MASTER_DATA,
+                      "ANSWER" = "AnswerText",
+                      "YEAR" = "SurveyID",
+                      "USER_ID" = "UserID",
+                      "QUESTION_ID" = "Questionid",
+                      "QUESTION" = "Questiontext")
+skim_without_charts(MASTER_DATA)
+```
+### Gathering General Information about the survey
+```{r}
+glimpse(unique(MASTER_DATA$QUESTION ))
+```
+
+### Getting the IDs of the Questions for selection
+```{r}
+MASTER_DATA%>%
+  group_by(MASTER_DATA$QUESTION_ID,QUESTION)%>%
+  summarise()
+```
+
+
+### Selection of the core questions to be used for analysis
+```{r}
+selected_question_IDs <- c(1, 2, 3, 5, 117, 33, 89, 96, 48, 49, 65)
+MASTER_DATA <- MASTER_DATA%>%
+  filter(QUESTION_ID %in% selected_question_IDs)
+unique(MASTER_DATA$QUESTION_ID)
+#Count of answers per selected question
+table(MASTER_DATA$QUESTION)
+```
+
+
+### User Age Statistics
+```{r}
+AGE_DATA <-
+  filter(MASTER_DATA,MASTER_DATA$QUESTION_ID == 1)
+AGE_DATA$ANSWER <- as.numeric(AGE_DATA$ANSWER)
+for (q in AGE_DATA$QUESTION_ID) {
+  if(q == 1){
+    AGE_DATA$ANSWER[AGE_DATA$ANSWER>80 | AGE_DATA$ANSWER < 18] <- NA
+    }
+  }
+
+min_age <- setNames(aggregate(AGE_DATA$ANSWER~AGE_DATA$QUESTION,FUN = "min"),c("Question","Min_Value"))
+max_age <- setNames(aggregate(AGE_DATA$ANSWER~AGE_DATA$QUESTION,FUN = "max"),c("Question","Max_Value"))
+average_age <- setNames(aggregate(AGE_DATA$ANSWER~AGE_DATA$QUESTION,FUN = "mean"),c("Question","Mean"))
+min_age
+max_age
+average_age
+```
+
+### Gender of the Survey users
+```{r}
+#Dividing the gender to Male/Female/Other
+
+GENDER_DATA <- MASTER_DATA%>%
+  filter(QUESTION_ID == 2 )
+
+#Summing down the gender categories into 3
+GENDER_DATA$ANSWER[GENDER_DATA$ANSWER != "Male" & GENDER_DATA$ANSWER != "Female"] <- "Other"
+
+#breakdown of Genders
+table(GENDER_DATA$YEAR,GENDER_DATA$ANSWER)
+
+#Plotting the gender over the years
+GENDER_DATA %>%
+  group_by(ANSWER,YEAR)%>%
+  summarise(number = n())%>%
+  ggplot(aes(x = YEAR, y = number , fill = ANSWER, group = ANSWER, color = ANSWER)) + geom_line(linetype = 1, color = "red") + geom_point() + labs(y = "Count of Gender", title = "Count of type of Gender per Year")
+
+```
+
+### Countries where the users live in
+```{r}
+COUNTRY_DATA <- MASTER_DATA %>% 
+  filter(QUESTION_ID == 3)
+
+#Removed the Countries marked as "-1" and "Other"
+COUNTRY_DATA <- subset(COUNTRY_DATA,ANSWER != -1 & ANSWER != "Other")
+
+#replacing "United States" by "United States of America" and "Bahamas, The" with "The Bahamas"
+COUNTRY_DATA$ANSWER[COUNTRY_DATA$ANSWER == "United States"] <- "United States of America"
+COUNTRY_DATA$ANSWER[COUNTRY_DATA$ANSWER == "Bahamas, The"] <- "The Bahamas"
+
+table(COUNTRY_DATA$ANSWER,COUNTRY_DATA$YEAR)
+
+COUNTRY_DATA%>%
+  group_by(ANSWER,YEAR)%>%
+  summarize(number = n())%>%
+  arrange(desc(number),YEAR,ANSWER)
+```
+
+
+### How much of the users are self employed
+```{r}
+#Taking out the answers that are -1 as this is a faulty data
+EMP_DATA <- MASTER_DATA%>%
+  filter(QUESTION_ID == 5)
+
+EMP_DATA <- subset(EMP_DATA, ANSWER != -1)
+
+for (a in EMP_DATA$ANSWER) {
+  if(a == "1" | a == 1){
+    EMP_DATA$ANSWER[EMP_DATA$ANSWER == 1 | EMP_DATA$ANSWER == "1"] <- "Yes"
+  }
+  else{ 
+    EMP_DATA$ANSWER[EMP_DATA$ANSWER == 0 | EMP_DATA$ANSWER == "0"] <- "No"}
+}
+table(EMP_DATA$YEAR,EMP_DATA$ANSWER)
+
+#Visualizing the count of the Answers per year
+EMP_DATA%>%
+  group_by(ANSWER,YEAR)%>%
+  summarize(Count = n())%>%
+  
+ggplot(aes(x = YEAR, y = Count, fill = ANSWER, color = ANSWER)) + geom_col(position = "dodge") + geom_point() + geom_line(linetype = 1, color = "red")
+
+
+#Visualizing the percentage per answer per year
+EMP_DATA2 <- EMP_DATA%>%
+  mutate(PercTot = round(1 / length(ANSWER),digits = 5))
+
+p2 <- ggplot(data = EMP_DATA2,aes(x = YEAR, y = PercTot, fill = ANSWER, color = ANSWER))
+p2 + 
+  geom_bar(stat = "identity", #confusing subject, when plotting pivoted data, always leave "identity"
+            position = "fill",
+            width = 0.6,      # how wide (0-1) the bars are
+            color = "black",  # the outline color of the bars
+            size = 0.5,         # the thickness of the outline
+            alpha = 0.9) +    # the opaqueness of the fill colors
+   theme_minimal()+           # the background
+   theme(legend.position = "right", axis.text.x = element_text(angle = 45, hjust = 0.8)) +                         # legend position
+   labs(x= "Year", y = "Percent", title = "Self-Employment % per Year") +  # axis labels and footnote
+   scale_x_discrete(limits = EMP_DATA2$YEAR) + # filter only certain factors
+   geom_text(aes(label = PercTot), position = position_fill(vjust = 0.5), size = 3)  # the labels
+
+```
+
+### What are the job positions of the users
+```{r}
+POS_DATA <- MASTER_DATA%>%
+  filter(QUESTION_ID == 117)
+table(POS_DATA$ANSWER,POS_DATA$YEAR)
+
+
+POS_DATA%>%
+  group_by(ANSWER,YEAR)%>%
+  summarize(Count = n())%>%
+  ggplot(aes(x = "", y = Count, fill = ANSWER)) + geom_bar(width = 1, stat = "identity") + coord_polar("y", start=0) + labs(title = "Count of Job positions")
+```
+
+
+### How many people currently have mental disorders?
+```{r}
+MDO_DATA <- MASTER_DATA%>%
+  filter(QUESTION_ID == 33)
+
+
+#Replace "Possibly" with "Maybe"
+for (a in MDO_DATA$ANSWER) {
+  if(a == "Possibly"){
+    MDO_DATA$ANSWER[MDO_DATA$ANSWER == "Possibly"] <- "Maybe"
+  }
+}
+table(MDO_DATA$YEAR,MDO_DATA$ANSWER)
+
+#Visualizing the Count of the answers
+MDO_DATA%>%
+  group_by(ANSWER,YEAR)%>%
+  summarize(Count = n())%>%
+  ggplot(aes(x = YEAR, y = Count, fill = ANSWER, color = ANSWER)) + geom_col(position = "dodge") + geom_point() + geom_line(linetype = 1, color = "red")
+  
+
+# Visualizing the percentage per answer per year
+MDO_DATA2 <- MDO_DATA%>%
+  mutate(PercTot = round(1 / length(ANSWER),5))
+
+ggplot(data = MDO_DATA2,aes(x = MDO_DATA2$YEAR, y = MDO_DATA2$PercTot, fill = ANSWER, color = ANSWER)) +
+  geom_bar(stat = "identity",
+            position = "fill",
+            width = 0.5,  
+            color = "black",
+            size = 0.5,
+            alpha = 0.9) +
+   theme_minimal() +
+   theme(legend.position = "right", axis.text.x = element_text(angle = 45, hjust = 0.8)) +
+   labs(x= "Year", y = "Percent", title = "% of Mental Disorders per Year") +  
+   scale_x_discrete(limits = MDO_DATA2$YEAR) +
+   geom_text(aes(label = PercTot), position = position_fill(vjust = 0.5), size = 3) +
+   labs(title = "Mental disorder count per year")
+
+
+```
+
+
+### The race of the users
+```{r}
+RACE_DATA <- MASTER_DATA %>%
+  filter(QUESTION_ID == 89)
+
+for (a in RACE_DATA$ANSWER) {
+  if(a == -1){
+    RACE_DATA$ANSWER[RACE_DATA$ANSWER == -1] <- "Prefer not to say"
+  }
+}
+
+RACE_DATA <- RACE_DATA%>%
+  filter(ANSWER != -1)
+
+table(RACE_DATA$ANSWER,RACE_DATA$YEAR)
+
+RACE_DATA%>%
+  group_by(ANSWER,YEAR)%>%
+  summarize(Count = n())%>%
+  ggplot(aes(x = "", y = Count, fill = ANSWER)) + geom_bar(width = 6, stat = "identity") + coord_polar("y", start=0) + labs(title = "Race of the Participants")
+
+```
+
+
+### Does your employer provide resources to learn more about mental health issues and how to seek help?
+```{r}
+HELP_DATA <- MASTER_DATA%>%
+  filter(QUESTION_ID == 96)
+table(HELP_DATA$ANSWER,HELP_DATA$YEAR)
+
+HELP_DATA%>%
+  group_by(ANSWER,YEAR)%>%
+  summarize(Count = n())%>%
+  ggplot(aes(x = "", y = Count, fill = ANSWER)) + geom_bar(width = 1, stat = "identity") + coord_polar("y", start=0) + labs(title = "Does your employer provide resources regarding mental health issues?")
+```
+
+
+### If you have a mental health disorder, how often do you feel that it interferes with your work when being treated effectively?
+```{r}
+TREATED_DATA <- MASTER_DATA%>%
+  filter(QUESTION_ID == 48)
+
+table(TREATED_DATA$ANSWER,TREATED_DATA$YEAR)
+
+#Count of answers per user per year
+TREATED_DATA%>%
+  group_by(ANSWER,YEAR)%>%
+  summarize(Count = n())%>%
+  ggplot(aes(x = YEAR, y = Count, fill = ANSWER, color = ANSWER)) + geom_col(position = "dodge") + geom_point() + geom_line(linetype = 1, color = "black")
+
+
+#Percentage of each answer per year
+TREATED_DATA2 <- TREATED_DATA%>%
+  mutate(PercTot = round(1 / length(ANSWER),5))
+
+ggplot(data = TREATED_DATA2,aes(x = TREATED_DATA2$YEAR, y = TREATED_DATA2$PercTot, fill = ANSWER, color = ANSWER)) +
+  geom_bar(stat = "identity",
+            position = "fill",
+            width = 0.5,  
+            color = "black",
+            size = 0.5,
+            alpha = 0.9) +
+   theme_minimal() +
+   theme(legend.position = "right", axis.text.x = element_text(angle = 45, hjust = 0.8)) +
+   labs(x= "Year", y = "Percent", title = "% of Interference of the mental Disorder in work when treated") +  
+   scale_x_discrete(limits = TREATED_DATA2$YEAR) +
+   geom_text(aes(label = PercTot), position = position_fill(vjust = 0.5), size = 3)
+
+```
+
+
+### If you have a mental health disorder, how often do you feel that it interferes with your work when not being treated effectively (i.e., when you are experiencing symptoms)?
+```{r}
+nTREATED_DATA <- MASTER_DATA%>%
+  filter(QUESTION_ID == 49)
+table(nTREATED_DATA$ANSWER, nTREATED_DATA$YEAR)
+
+#Count of the answers per year
+nTREATED_DATA%>%
+  group_by(ANSWER,YEAR)%>%
+  summarize(Count = n())%>%
+  ggplot(aes(x = YEAR, y = Count, fill = ANSWER, color = ANSWER)) + geom_col(position = "dodge") + geom_point() + geom_line(linetype = 1, color = "black")
+
+
+#Percentage of each answer per year
+nTREATED_DATA2 <- nTREATED_DATA%>%
+  mutate(PercTot = round(1 / length(ANSWER),5))
+
+ggplot(data = nTREATED_DATA2,aes(x = nTREATED_DATA2$YEAR, y = nTREATED_DATA2$PercTot, fill = ANSWER, color = ANSWER)) +
+  geom_bar(stat = "identity",
+            position = "fill",
+            width = 0.5,  
+            color = "black",
+            size = 0.5,
+            alpha = 0.9) +
+   theme_minimal() +
+   theme(legend.position = "right", axis.text.x = element_text(angle = 45, hjust = 0.8)) +
+   labs(x= "Year", y = "Percent", title = "% of Interference of the mental Disorder in work when not treated") +  
+   scale_x_discrete(limits = nTREATED_DATA2$YEAR) +
+   geom_text(aes(label = PercTot), position = position_fill(vjust = 0.5), size = 3)
+
+```
+
+
+### Overall, how much importance does your employer place on mental health?
+```{r}
+IMP_DATA <- MASTER_DATA%>%
+  filter(QUESTION_ID == 65)
+
+#None = -1 till 3
+#Some = 4 till 7
+#Very much = 8 till 10
+
+none = c(-1,0,1,2,3)
+some = c(4,5,6,7)
+Very = c(8,9,10)
+
+for (a in IMP_DATA$ANSWER) {
+  IMP_DATA$ANSWER[IMP_DATA$ANSWER %in% none] <- "NONE"
+  IMP_DATA$ANSWER[IMP_DATA$ANSWER %in% some] <- "SOME"
+  IMP_DATA$ANSWER[IMP_DATA$ANSWER %in% Very] <- "Very Much"
+}
+table(IMP_DATA$ANSWER,IMP_DATA$YEAR)
+
+
+#Importance count per user's employers per year
+IMP_DATA%>%
+  group_by(ANSWER,YEAR)%>%
+  summarize(Count = n())%>%
+  ggplot(aes(x = YEAR, y = Count, fill = ANSWER, color = ANSWER)) + geom_col(position = "dodge") + geom_point() + geom_line(linetype = 1, color = "black")
+
+
+#Percentage of importance per users' employers per year
+IMP_DATA2 <- IMP_DATA%>%
+  mutate(PercTot = round(1 / length(ANSWER),5))
+
+ggplot(data = IMP_DATA2,aes(x = IMP_DATA2$YEAR, y = IMP_DATA2$PercTot, fill = ANSWER, color = ANSWER)) +
+  geom_bar(stat = "identity",
+            position = "fill",
+            width = 0.4,  
+            color = "black",
+            size = 0.5,
+            alpha = 0.9) +
+   theme_minimal() +
+   theme(legend.position = "right", axis.text.x = element_text(angle = 45, hjust = 0.8)) +
+   labs(x= "Year", y = "Percent", title = "% of Importance given By Employers on Mental Health") +  
+   scale_x_discrete(limits = IMP_DATA2$YEAR) +
+   geom_text(aes(label = PercTot), position = position_fill(vjust = 0.5), size = 3)
+
+```
+
+
